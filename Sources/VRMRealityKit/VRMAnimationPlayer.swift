@@ -1,13 +1,14 @@
 #if canImport(RealityKit)
+import CoreGraphics
 import Foundation
 import RealityKit
 import simd
 import VRMKit
 import VRMKitRuntime
 
-/// Plays a VRM Animation (`.vrma`) clip on a loaded `VRMEntity` by retargeting
-/// the clip's humanoid bones onto the avatar's skeleton. Call `update(deltaTime:)`
-/// once per frame (e.g. from `SceneEvents.Update`).
+/// Plays a VRM Animation (`.vrma`) clip on a loaded `VRMEntity`, retargeting the
+/// clip's humanoid bones, expressions and look-at onto the avatar. Call
+/// `update(deltaTime:)` once per frame (e.g. from `SceneEvents.Update`).
 @available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
 @MainActor
 public final class VRMAnimationPlayer {
@@ -49,6 +50,15 @@ public final class VRMAnimationPlayer {
     private var hipsSourceRestTranslation: SIMD3<Float> = .zero
     private var hipsHeightScale: Float = 1
 
+    // Expressions and look-at.
+    private struct ExpressionBinding {
+        let sourceNode: Int
+        let key: BlendShapeKey
+    }
+    private var expressionBindings: [ExpressionBinding] = []
+    private var lookAtNode: Int?
+    private var eyeBones: [(entity: Entity, restLocalRotation: simd_quatf)] = []
+
     public init(animation: VRMAnimation, target: VRMEntity) throws {
         self.animation = animation
         self.target = target
@@ -64,6 +74,7 @@ public final class VRMAnimationPlayer {
 
         precomputeSource()
         buildBindings(target: target)
+        buildExpressionsAndLookAt(target: target)
     }
 
     // MARK: - Transport
@@ -191,6 +202,52 @@ public final class VRMAnimationPlayer {
         boneBindings.sort { $0.depth < $1.depth }
     }
 
+    private func buildExpressionsAndLookAt(target: VRMEntity) {
+        if let expressions = animation.vrmAnimation.expressions {
+            for (name, expression) in expressions.preset ?? [:] {
+                expressionBindings.append(ExpressionBinding(sourceNode: expression.node,
+                                                            key: Self.blendShapeKey(forExpression: name)))
+            }
+            for (name, expression) in expressions.custom ?? [:] {
+                expressionBindings.append(ExpressionBinding(sourceNode: expression.node, key: .custom(name)))
+            }
+        }
+
+        lookAtNode = animation.vrmAnimation.lookAt?.node
+        for bone in [Humanoid.Bones.leftEye, .rightEye] {
+            if let eye = target.humanoid.node(for: bone) {
+                eyeBones.append((eye, eye.orientation))
+            }
+        }
+    }
+
+    /// Maps a VRM 1.0 expression name to the avatar's blend-shape key (which uses
+    /// VRM 0.x preset naming after migration).
+    private static func blendShapeKey(forExpression name: String) -> BlendShapeKey {
+        let preset: BlendShapePreset
+        switch name {
+        case "happy": preset = .joy
+        case "angry": preset = .angry
+        case "sad": preset = .sorrow
+        case "relaxed": preset = .fun
+        case "aa": preset = .a
+        case "ih": preset = .i
+        case "ou": preset = .u
+        case "ee": preset = .e
+        case "oh": preset = .o
+        case "blink": preset = .blink
+        case "blinkLeft": preset = .blinkL
+        case "blinkRight": preset = .blinkR
+        case "lookUp": preset = .lookUp
+        case "lookDown": preset = .lookDown
+        case "lookLeft": preset = .lookLeft
+        case "lookRight": preset = .lookRight
+        case "neutral": preset = .neutral
+        default: return .custom(name) // e.g. "surprised" (no VRM 0.x equivalent)
+        }
+        return .preset(preset)
+    }
+
     private func depth(of entity: Entity) -> Int {
         var d = 0
         var current: Entity? = entity
@@ -262,11 +319,31 @@ public final class VRMAnimationPlayer {
             if flipY { offset.x = -offset.x; offset.z = -offset.z }
             hipsEntity.transform.translation = hipsTargetRestTranslation + offset
         }
+
+        // 4. Expressions: the X component of the node's translation is the weight.
+        for binding in expressionBindings {
+            guard let weight = sample[binding.sourceNode]?.translation?.x else { continue }
+            target?.setBlendShape(value: CGFloat(max(0, min(1, weight))), for: binding.key)
+        }
+
+        // 5. Look-at: the node's local rotation is the eye gaze direction.
+        if let lookAtNode, !eyeBones.isEmpty, var gaze = sample[lookAtNode]?.rotation {
+            if flipY { gaze = simd_mul(simd_mul(yFlip, gaze), yFlip) }
+            for eye in eyeBones {
+                eye.entity.orientation = simd_mul(eye.restLocalRotation, gaze)
+            }
+        }
     }
 
     private func restorePose() {
         for binding in boneBindings {
             binding.targetEntity.orientation = binding.targetRestLocalRotation
+        }
+        for eye in eyeBones {
+            eye.entity.orientation = eye.restLocalRotation
+        }
+        for binding in expressionBindings {
+            target?.setBlendShape(value: 0, for: binding.key)
         }
         hipsEntity?.transform.translation = hipsTargetRestTranslation
         target?.update(at: 0)
