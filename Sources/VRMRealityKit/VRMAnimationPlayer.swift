@@ -12,10 +12,10 @@ import VRMKitRuntime
 @available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
 @MainActor
 public final class VRMAnimationPlayer {
-    public let animation: VRMAnimation
+    public private(set) var animation: VRMAnimation
     private weak var target: VRMEntity?
     private let rootEntity: Entity
-    private let sampler: VRMAnimationSampler
+    private var sampler: VRMAnimationSampler
 
     public var isLooping: Bool = true
     public var speed: Double = 1.0
@@ -71,16 +71,30 @@ public final class VRMAnimationPlayer {
 
         let clip = try animation.clips.first ??? VRMError._dataInconsistent("vrma contains no animation clip")
         self.sampler = try VRMAnimationSampler(animation: clip, gltf: animation.gltf)
-
-        precomputeSource()
-        buildBindings(target: target)
-        buildExpressionsAndLookAt(target: target)
+        rebuild()
     }
 
     // MARK: - Transport
 
     public func play() { isPlaying = true }
     public func pause() { isPlaying = false }
+
+    /// Switches to a different `.vrma` clip on the same avatar, restoring the
+    /// rest pose first so retargeting stays correct. Preserves the play state.
+    public func setAnimation(_ animation: VRMAnimation) throws {
+        let wasPlaying = isPlaying
+        isPlaying = false
+        restorePose()
+        clearBindings()
+
+        self.animation = animation
+        let clip = try animation.clips.first ??? VRMError._dataInconsistent("vrma contains no animation clip")
+        self.sampler = try VRMAnimationSampler(animation: clip, gltf: animation.gltf)
+        rebuild()
+
+        time = 0
+        isPlaying = wasPlaying
+    }
 
     /// Stops playback and restores the avatar's rest pose.
     public func stop() {
@@ -124,6 +138,22 @@ public final class VRMAnimationPlayer {
     }
 
     // MARK: - Setup
+
+    private func rebuild() {
+        precomputeSource()
+        guard let target else { return }
+        buildBindings(target: target)
+        buildExpressionsAndLookAt(target: target)
+    }
+
+    private func clearBindings() {
+        boneBindings.removeAll()
+        expressionBindings.removeAll()
+        eyeBones.removeAll()
+        hipsEntity = nil
+        hipsSourceNode = nil
+        hipsHeightScale = 1
+    }
 
     /// Precomputes the clip's node hierarchy, rest local/world rotations and a
     /// root-to-leaf traversal order.

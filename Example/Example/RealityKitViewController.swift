@@ -10,8 +10,9 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
     private var updateSubscription: Cancellable?
     private var loadedEntity: VRMEntity?
     private var animationPlayer: VRMAnimationPlayer?
-    /// Drop a `.vrma` file with this name into the app bundle to play it.
-    private let vrmaName = "test"
+    /// All `.vrma` files bundled with the app (drop your own into the target).
+    private lazy var animationURLs: [URL] = (Bundle.main.urls(forResourcesWithExtension: "vrma", subdirectory: nil) ?? [])
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
     private var cameraAnchor: AnchorEntity?
     private var cameraEntity: PerspectiveCamera?
     private var orbitYaw: Float = 0
@@ -68,6 +69,27 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
             expressionSegmentedControl.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             expressionSegmentedControl.bottomAnchor.constraint(equalTo: segmentedControl.topAnchor, constant: -20)
         ])
+
+        // Animation switcher: one segment per bundled .vrma (e.g. stand / sit / run).
+        if animationURLs.count > 1 {
+            let items = animationURLs.map { $0.deletingPathExtension().lastPathComponent }
+            let control = UISegmentedControl(items: items)
+            control.selectedSegmentIndex = 0
+            control.addTarget(self, action: #selector(animationSegmentChanged(_:)), for: .valueChanged)
+            control.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(control)
+            NSLayoutConstraint.activate([
+                control.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                control.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10)
+            ])
+        }
+    }
+
+    @objc private func animationSegmentChanged(_ sender: UISegmentedControl) {
+        guard animationURLs.indices.contains(sender.selectedSegmentIndex),
+              let animation = try? VRMAnimation(withURL: animationURLs[sender.selectedSegmentIndex]) else { return }
+        try? animationPlayer?.setAnimation(animation)
+        animationPlayer?.play()
     }
 
     @objc private func segmentChanged(_ sender: UISegmentedControl) {
@@ -105,11 +127,9 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
             vrmEntity.setBlendShape(value: 1.0, for: .preset(currentExpression.preset))
             loadedEntity = vrmEntity
 
-            // Play a bundled `.vrma` animation if present; otherwise pose manually.
+            // Play the first bundled `.vrma` if present; otherwise pose manually.
             animationPlayer = nil
-            let vrmaURLs = Bundle.main.urls(forResourcesWithExtension: "vrma", subdirectory: nil) ?? []
-            let url = vrmaURLs.first { $0.deletingPathExtension().lastPathComponent == vrmaName } ?? vrmaURLs.first
-            if let url,
+            if let url = animationURLs.first,
                let animation = try? VRMAnimation(withURL: url),
                let player = try? VRMAnimationPlayer(animation: animation, target: vrmEntity) {
                 player.play()
