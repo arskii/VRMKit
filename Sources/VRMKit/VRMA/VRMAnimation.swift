@@ -42,7 +42,7 @@ public struct VRMAnimation {
         let decoder = DictionaryDecoder()
         let vrmAnimation = try decoder.decode(VRMCVRMAnimation.self, from: raw)
         self.vrmAnimation = vrmAnimation
-        self.specVersion = vrmAnimation.specVersion
+        self.specVersion = vrmAnimation.specVersion ?? "1.0"
 
         self.humanoidBoneNodeMap = vrmAnimation.humanoid?.humanBones
             .reduce(into: [:]) { result, entry in

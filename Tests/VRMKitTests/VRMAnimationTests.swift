@@ -97,6 +97,31 @@ final class VRMAnimationTests: XCTestCase {
         XCTAssertEqual(abs(mid!.axis.y), 1, accuracy: 1e-3)
     }
 
+    func testParsesWhenSpecVersionMissing() throws {
+        // Some exporters omit specVersion; parsing must still succeed.
+        var glb = makeVRMA()
+        // Rebuild without specVersion in the extension.
+        let s = Float(sin(Double.pi / 4)); let c = Float(cos(Double.pi / 4))
+        let floats: [Float] = [0, 1, 0, 0, 0, 1, 0, s, 0, c]
+        var bin = Data()
+        for f in floats { withUnsafeBytes(of: f.bitPattern.littleEndian) { bin.append(contentsOf: $0) } }
+        let json: [String: Any] = [
+            "asset": ["version": "2.0"], "scene": 0, "scenes": [["nodes": [0]]],
+            "nodes": [["name": "hips"]], "buffers": [["byteLength": bin.count]],
+            "bufferViews": [["buffer": 0, "byteOffset": 0, "byteLength": 8],
+                            ["buffer": 0, "byteOffset": 8, "byteLength": 32]],
+            "accessors": [["bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR"],
+                          ["bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC4"]],
+            "animations": [["channels": [["sampler": 0, "target": ["node": 0, "path": "rotation"]]],
+                           "samplers": [["input": 0, "output": 1, "interpolation": "LINEAR"]]]],
+            "extensions": ["VRMC_vrm_animation": ["humanoid": ["humanBones": ["hips": ["node": 0]]]]],
+        ]
+        glb = Self.makeGLB(json: json, bin: bin)
+        let animation = try VRMAnimation(data: glb)
+        XCTAssertEqual(animation.specVersion, "1.0") // default
+        XCTAssertEqual(animation.humanoidBoneNodeMap["hips"], 0)
+    }
+
     func testSampleClampsOutsideRange() throws {
         let animation = try VRMAnimation(data: makeVRMA())
         let sampler = try VRMAnimationSampler(animation: animation.clips[0], gltf: animation.gltf)

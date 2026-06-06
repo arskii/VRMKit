@@ -9,7 +9,8 @@ import Foundation
 // nodes) can be retargeted onto an arbitrary VRM avatar.
 
 public struct VRMCVRMAnimation: Codable {
-    public let specVersion: String
+    // Optional: some exporters omit `specVersion`.
+    public let specVersion: String?
     public let humanoid: Humanoid?
     public let expressions: Expressions?
     public let lookAt: LookAt?

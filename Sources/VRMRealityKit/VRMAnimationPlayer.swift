@@ -10,10 +10,8 @@ import VRMKitRuntime
 ///
 /// Usage:
 /// ```swift
-/// let vrm = try VRMLoader().load(named: "avatar.vrm")
-/// let entity = try VRMEntityLoader(vrm: vrm).loadEntity()
-///
-/// let animation = try VRMAnimation(data: vrmaData)
+/// let entity = try VRMEntityLoader(named: "avatar.vrm").loadEntity()
+/// let animation = try VRMAnimation(named: "dance")
 /// let player = try VRMAnimationPlayer(animation: animation, target: entity)
 /// player.play()
 ///
@@ -22,19 +20,18 @@ import VRMKitRuntime
 /// ```
 ///
 /// ## Retargeting model
-/// The clip stores, per humanoid bone, a *local* rotation track. Since VRM
-/// humanoid bones share a canonical orientation, the motion is applied as the
-/// delta from the source rest pose onto the target rest pose:
-///
-///     target.localRotation = targetRestLocal * (sourceRestLocal⁻¹ * sampledLocal)
-///
-/// The hips translation is normalized by the ratio of the avatar's hips height
-/// to the clip's hips height so motion scales across differently-sized models.
+/// Each animated bone's **world-space** rotation delta (relative to the clip's
+/// rest pose) is computed by accumulating local rotations down the clip's node
+/// hierarchy, then applied on top of the avatar bone's own rest world rotation
+/// and converted back to a local rotation. This is robust to differing rest
+/// poses between the clip and the avatar. For VRM 0.x avatars (which face the
+/// opposite direction from VRM 1.0 / the clip) the delta is mirrored about Y.
 @available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
 @MainActor
 public final class VRMAnimationPlayer {
     public let animation: VRMAnimation
     private weak var target: VRMEntity?
+    private let rootEntity: Entity
     private let sampler: VRMAnimationSampler
 
     /// Whether playback loops back to the start when reaching the end.
@@ -51,12 +48,24 @@ public final class VRMAnimationPlayer {
     private struct BoneBinding {
         let sourceNode: Int
         let targetEntity: Entity
-        let targetRestLocalRotation: simd_quatf
-        let sourceRestLocalRotationInverse: simd_quatf
+        let targetRestLocalRotation: simd_quatf  // local, for restoring
+        let targetRestWorldRotation: simd_quatf  // relative to the avatar root
+        let depth: Int                           // entity depth, for parent-first ordering
     }
 
     private var boneBindings: [BoneBinding] = []
 
+    // Clip-side rest data (per glTF node), all relative to the clip root.
+    private var sourceParent: [Int] = []
+    private var sourceRestLocalRotation: [simd_quatf] = []
+    private var sourceRestWorldRotation: [simd_quatf] = []
+    private var sourceTopoOrder: [Int] = []
+
+    private let flipY: Bool
+    private let yFlip = simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0)) // its own inverse
+    private let identityQuat = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+
+    // Hips translation.
     private var hipsEntity: Entity?
     private var hipsSourceNode: Int?
     private var hipsTargetRestTranslation: SIMD3<Float> = .zero
@@ -66,10 +75,17 @@ public final class VRMAnimationPlayer {
     public init(animation: VRMAnimation, target: VRMEntity) throws {
         self.animation = animation
         self.target = target
+        self.rootEntity = target.entity
+
+        switch target.vrm {
+        case .v0: self.flipY = true
+        case .v1: self.flipY = false
+        }
 
         let clip = try animation.clips.first ??? VRMError._dataInconsistent("vrma contains no animation clip")
         self.sampler = try VRMAnimationSampler(animation: clip, gltf: animation.gltf)
 
+        precomputeSource()
         buildBindings(target: target)
     }
 
@@ -123,20 +139,64 @@ public final class VRMAnimationPlayer {
 
     // MARK: - Setup
 
+    /// Precomputes the clip's node hierarchy, rest local/world rotations and a
+    /// root-to-leaf traversal order.
+    private func precomputeSource() {
+        let nodes = animation.gltf.jsonData.nodes ?? []
+        let count = nodes.count
+        sourceParent = Array(repeating: -1, count: count)
+        sourceRestLocalRotation = nodes.map { Self.localRotation(of: $0) }
+        sourceRestWorldRotation = Array(repeating: identityQuat, count: count)
+
+        for (index, node) in nodes.enumerated() {
+            for child in node.children ?? [] where nodes.indices.contains(child) {
+                sourceParent[child] = index
+            }
+        }
+
+        // Root-to-leaf order via DFS from scene roots (fallback: all nodes).
+        let gltf = animation.gltf.jsonData
+        let roots: [Int]
+        if let scene = gltf.scenes?[safe: gltf.scene], let sceneNodes = scene.nodes {
+            roots = sceneNodes
+        } else {
+            roots = (0..<count).filter { sourceParent[$0] == -1 }
+        }
+        var order: [Int] = []
+        order.reserveCapacity(count)
+        var stack = roots.reversed().map { $0 }
+        var visited = Set<Int>()
+        while let node = stack.popLast() {
+            guard nodes.indices.contains(node), visited.insert(node).inserted else { continue }
+            order.append(node)
+            for child in (nodes[node].children ?? []).reversed() { stack.append(child) }
+        }
+        sourceTopoOrder = order
+
+        for node in order {
+            let parent = sourceParent[node]
+            sourceRestWorldRotation[node] = parent >= 0
+                ? simd_mul(sourceRestWorldRotation[parent], sourceRestLocalRotation[node])
+                : sourceRestLocalRotation[node]
+        }
+    }
+
     private func buildBindings(target: VRMEntity) {
         let sourceNodes = animation.gltf.jsonData.nodes ?? []
-        let sourceWorld = sourceWorldTranslations()
+        let sourceWorldPositions = sourceRestWorldPositions()
 
         for (boneName, sourceNode) in animation.humanoidBoneNodeMap {
             guard let bone = Humanoid.Bones(rawValue: boneName),
                   let targetEntity = target.humanoid.node(for: bone),
                   sourceNodes.indices.contains(sourceNode) else { continue }
 
-            let sourceRest = sourceNodes[sourceNode].rotation.simdQuat
-            let binding = BoneBinding(sourceNode: sourceNode,
-                                      targetEntity: targetEntity,
-                                      targetRestLocalRotation: targetEntity.transform.rotation,
-                                      sourceRestLocalRotationInverse: sourceRest.inverse)
+            let binding = BoneBinding(
+                sourceNode: sourceNode,
+                targetEntity: targetEntity,
+                targetRestLocalRotation: targetEntity.orientation,
+                targetRestWorldRotation: targetEntity.orientation(relativeTo: rootEntity),
+                depth: depth(of: targetEntity)
+            )
             boneBindings.append(binding)
 
             if bone == .hips {
@@ -144,52 +204,55 @@ public final class VRMAnimationPlayer {
                 hipsSourceNode = sourceNode
                 hipsTargetRestTranslation = targetEntity.transform.translation
                 hipsSourceRestTranslation = sourceNodes[sourceNode].translation.simd
-                let targetHipsWorldY = targetEntity.position(relativeTo: nil).y
-                let sourceHipsWorldY = sourceWorld[sourceNode]?.y ?? hipsSourceRestTranslation.y
+                let targetHipsWorldY = targetEntity.position(relativeTo: rootEntity).y
+                let sourceHipsWorldY = sourceWorldPositions[sourceNode]?.y ?? hipsSourceRestTranslation.y
                 if abs(sourceHipsWorldY) > 1e-5 {
                     hipsHeightScale = targetHipsWorldY / sourceHipsWorldY
                 }
             }
         }
+
+        // Apply parents before children so parent world rotations are up to date.
+        boneBindings.sort { $0.depth < $1.depth }
     }
 
-    /// Rest-pose world translations of the clip's nodes (walking the glTF hierarchy).
-    private func sourceWorldTranslations() -> [Int: SIMD3<Float>] {
+    private func depth(of entity: Entity) -> Int {
+        var d = 0
+        var current: Entity? = entity
+        while let node = current, node !== rootEntity {
+            d += 1
+            current = node.parent
+        }
+        return d
+    }
+
+    /// Rest-pose world positions of the clip's nodes (relative to the clip root).
+    private func sourceRestWorldPositions() -> [Int: SIMD3<Float>] {
         let nodes = animation.gltf.jsonData.nodes ?? []
         guard !nodes.isEmpty else { return [:] }
-
-        var worldMatrices: [Int: simd_float4x4] = [:]
-        let gltf = animation.gltf.jsonData
-        let roots: [Int]
-        if let scene = gltf.scenes?[safe: gltf.scene], let sceneNodes = scene.nodes {
-            roots = sceneNodes
-        } else {
-            roots = Array(0..<nodes.count)
-        }
-
-        func visit(_ index: Int, parent: simd_float4x4) {
-            guard nodes.indices.contains(index) else { return }
-            let node = nodes[index]
+        var worldMatrices = [Int: simd_float4x4]()
+        for node in sourceTopoOrder {
+            let gltfNode = nodes[node]
             let local: simd_float4x4
-            if let matrix = node._matrix {
+            if let matrix = gltfNode._matrix {
                 local = matrix.simdMatrix
             } else {
-                local = Transform(scale: node.scale.simd,
-                                  rotation: node.rotation.simdQuat,
-                                  translation: node.translation.simd).matrix
+                local = Transform(scale: gltfNode.scale.simd,
+                                  rotation: gltfNode.rotation.simdQuat,
+                                  translation: gltfNode.translation.simd).matrix
             }
-            let world = parent * local
-            worldMatrices[index] = world
-            for child in node.children ?? [] {
-                visit(child, parent: world)
-            }
+            let parent = sourceParent[node]
+            let parentMatrix = parent >= 0 ? (worldMatrices[parent] ?? matrix_identity_float4x4) : matrix_identity_float4x4
+            worldMatrices[node] = parentMatrix * local
         }
-
-        for root in roots {
-            visit(root, parent: matrix_identity_float4x4)
-        }
-
         return worldMatrices.mapValues { SIMD3<Float>($0.columns.3.x, $0.columns.3.y, $0.columns.3.z) }
+    }
+
+    private static func localRotation(of node: GLTF.Node) -> simd_quatf {
+        if let matrix = node._matrix {
+            return Transform(matrix: matrix.simdMatrix).rotation
+        }
+        return node.rotation.simdQuat
     }
 
     // MARK: - Pose application
@@ -197,23 +260,38 @@ public final class VRMAnimationPlayer {
     private func applyPose(at time: TimeInterval) {
         let sample = sampler.sample(at: time)
 
-        for binding in boneBindings {
-            guard let nodeTransform = sample[binding.sourceNode],
-                  let rotation = nodeTransform.rotation else { continue }
-            let delta = binding.sourceRestLocalRotationInverse * rotation
-            binding.targetEntity.transform.rotation = binding.targetRestLocalRotation * delta
+        // 1. Accumulate the clip's animated world rotations (root → leaf).
+        var worldRot = sourceRestWorldRotation
+        for node in sourceTopoOrder {
+            let local = sample[node]?.rotation ?? sourceRestLocalRotation[node]
+            let parent = sourceParent[node]
+            worldRot[node] = parent >= 0 ? simd_mul(worldRot[parent], local) : local
         }
 
+        // 2. Apply each bone's world-space delta onto the avatar (parents first).
+        for binding in boneBindings {
+            let animWorld = worldRot[binding.sourceNode]
+            var delta = simd_mul(animWorld, sourceRestWorldRotation[binding.sourceNode].inverse)
+            if flipY {
+                delta = simd_mul(simd_mul(yFlip, delta), yFlip)
+            }
+            let desiredWorld = simd_mul(delta, binding.targetRestWorldRotation)
+            let parentWorld = binding.targetEntity.parent?.orientation(relativeTo: rootEntity) ?? identityQuat
+            binding.targetEntity.orientation = simd_mul(parentWorld.inverse, desiredWorld)
+        }
+
+        // 3. Hips translation (normalized by height ratio).
         if let hipsEntity, let hipsSourceNode,
            let translation = sample[hipsSourceNode]?.translation {
-            let offset = (translation - hipsSourceRestTranslation) * hipsHeightScale
+            var offset = (translation - hipsSourceRestTranslation) * hipsHeightScale
+            if flipY { offset.x = -offset.x; offset.z = -offset.z }
             hipsEntity.transform.translation = hipsTargetRestTranslation + offset
         }
     }
 
     private func restorePose() {
         for binding in boneBindings {
-            binding.targetEntity.transform.rotation = binding.targetRestLocalRotation
+            binding.targetEntity.orientation = binding.targetRestLocalRotation
         }
         hipsEntity?.transform.translation = hipsTargetRestTranslation
         target?.update(at: 0)

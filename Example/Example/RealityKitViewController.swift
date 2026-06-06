@@ -105,15 +105,24 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
             vrmEntity.setBlendShape(value: 1.0, for: .preset(currentExpression.preset))
             loadedEntity = vrmEntity
 
-            // Play a bundled `<vrmaName>.vrma` animation if present; otherwise pose manually.
+            // Play a bundled `.vrma` animation if present; otherwise pose manually.
             animationPlayer = nil
-            if let animation = try? VRMAnimation(named: vrmaName),
-               let player = try? VRMAnimationPlayer(animation: animation, target: vrmEntity) {
-                player.isLooping = true
-                player.play()
-                animationPlayer = player
-                print("VRMA loaded: \(vrmaName).vrma, duration \(player.duration)s")
+            let vrmaURLs = Bundle.main.urls(forResourcesWithExtension: "vrma", subdirectory: nil) ?? []
+            print("VRMA: found \(vrmaURLs.count) .vrma file(s) in bundle: \(vrmaURLs.map { $0.lastPathComponent })")
+            if let url = vrmaURLs.first(where: { $0.deletingPathExtension().lastPathComponent == vrmaName }) ?? vrmaURLs.first {
+                do {
+                    let animation = try VRMAnimation(withURL: url)
+                    let player = try VRMAnimationPlayer(animation: animation, target: vrmEntity)
+                    player.isLooping = true
+                    player.play()
+                    animationPlayer = player
+                    print("VRMA loaded: \(url.lastPathComponent), duration \(player.duration)s, bones bound: \(animation.humanoidBoneNodeMap.count)")
+                } catch {
+                    print("VRMA FAILED to load \(url.lastPathComponent): \(error)")
+                    poseManually(vrmEntity)
+                }
             } else {
+                print("VRMA: no .vrma in bundle — add one to the VRMExample target. Using manual pose.")
                 poseManually(vrmEntity)
             }
 
