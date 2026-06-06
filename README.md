@@ -27,6 +27,7 @@ For "VRM", please refer to [this page](https://dwango.github.io/en/vrm/).
 - [x] Face morphing (blend shape)
 - [x] Bone animation (skin / joint)
 - [x] Physics (spring bone)
+- [x] VRM Animation (`.vrma`) playback
 
 # Requirements
 
@@ -163,6 +164,41 @@ leftArm?.transform.rotation *= armRotation
 rightArm?.transform.rotation *= armRotation
 ```
 
+### VRM Animation (VRMA)
+
+Play a VRM Animation (`.vrma`) clip on a loaded avatar. The motion is retargeted
+onto the avatar's humanoid skeleton, so a single clip works on any VRM 0.x / 1.0
+model. Bones, hips root motion, expressions and look-at are all supported.
+
+```swift
+import VRMKit
+import VRMRealityKit
+
+let vrmEntity = try VRMEntityLoader(named: "model.vrm").loadEntity()
+
+let animation = try VRMAnimation(named: "idle")        // bundled idle.vrma
+// let animation = try VRMAnimation(withURL: url)
+// let animation = try VRMAnimation(data: data)
+
+let player = try VRMAnimationPlayer(animation: animation, target: vrmEntity)
+player.play()
+
+// Drive it once per frame (e.g. from RealityKit's SceneEvents.Update);
+// this also updates skinning and spring bones:
+player.update(deltaTime: event.deltaTime)
+
+// Switch clips at runtime (stand / sit / run, ...):
+try player.setAnimation(try VRMAnimation(named: "run"))
+
+// player.isLooping = true
+// player.speed = 1.0
+// player.pause() / player.stop()
+```
+
+> `.vrma` files are not bundled with this repository. Free sample animations are
+> available from the [VRoid Project on BOOTH](https://vroid.booth.pm/items/5512385).
+> See the [VRM Animation spec](https://vrm.dev/en/vrma/) for details.
+
 ### Read the thumbnail image
 
 ```swift
@@ -179,7 +215,7 @@ let image = try loader.loadThumbnail(from: vrm)
   - [ ] Render an avatar by RealityKit (as VRM 1.x)
 - [ ] VRM shaders support (MToon)
 - [ ] Improve rendering quality
-- [ ] Animation support (vrma)
+- [x] Animation support (vrma)
 - [ ] VRM editing function
 - [ ] GLTF renderer support
 
