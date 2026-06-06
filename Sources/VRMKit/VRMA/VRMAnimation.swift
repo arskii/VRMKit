@@ -18,6 +18,19 @@ public struct VRMAnimation {
     /// node index that the animation clips drive.
     public let humanoidBoneNodeMap: [String: Int]
 
+    /// Loads a `.vrma` bundled by `name` (with or without the `.vrma` extension).
+    public init(named name: String, in bundle: Bundle = .main) throws {
+        let url = bundle.url(forResource: name, withExtension: nil)
+            ?? bundle.url(forResource: name, withExtension: "vrma")
+        guard let url else { throw URLError(.fileDoesNotExist) }
+        try self.init(withURL: url)
+    }
+
+    /// Loads a `.vrma` from a file URL.
+    public init(withURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
     public init(data: Data) throws {
         let gltf = try BinaryGLTF(data: data)
         self.gltf = gltf

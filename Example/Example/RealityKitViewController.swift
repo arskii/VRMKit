@@ -9,6 +9,9 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
     private var arView: ARView?
     private var updateSubscription: Cancellable?
     private var loadedEntity: VRMEntity?
+    private var animationPlayer: VRMAnimationPlayer?
+    /// Drop a `.vrma` file with this name into the app bundle to play it.
+    private let vrmaName = "test"
     private var cameraAnchor: AnchorEntity?
     private var cameraEntity: PerspectiveCamera?
     private var orbitYaw: Float = 0
@@ -99,41 +102,33 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
             updateOrbitTarget(for: vrmEntity.entity, adjustDistance: false)
             updateCameraTransform()
             
-            let neck = vrmEntity.humanoid.node(for: .neck)
-            let leftArm: Entity?
-            let rightArm: Entity?
-            switch vrmEntity.vrm {
-            case .v1:
-                leftArm = vrmEntity.humanoid.node(for: .leftShoulder)
-                rightArm = vrmEntity.humanoid.node(for: .rightShoulder)
-            case .v0:
-                leftArm = vrmEntity.humanoid.node(for: .leftUpperArm)
-                rightArm = vrmEntity.humanoid.node(for: .rightUpperArm)
-            }
-            
-            let neckRotation = simd_quatf(angle: 20 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
-            let armRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
-            if let neck {
-                neck.transform.rotation = neck.transform.rotation * neckRotation
-            }
-            if let leftArm {
-                leftArm.transform.rotation = leftArm.transform.rotation * armRotation
-            }
-            if let rightArm {
-                rightArm.transform.rotation = rightArm.transform.rotation * armRotation
-            }
             vrmEntity.setBlendShape(value: 1.0, for: .preset(currentExpression.preset))
-            
             loadedEntity = vrmEntity
-            
-            let rotationOffset = model.initialRotation
 
+            // Play a bundled `<vrmaName>.vrma` animation if present; otherwise pose manually.
+            animationPlayer = nil
+            if let animation = try? VRMAnimation(named: vrmaName),
+               let player = try? VRMAnimationPlayer(animation: animation, target: vrmEntity) {
+                player.isLooping = true
+                player.play()
+                animationPlayer = player
+                print("VRMA loaded: \(vrmaName).vrma, duration \(player.duration)s")
+            } else {
+                poseManually(vrmEntity)
+            }
+
+            let rotationOffset = model.initialRotation
             var time: TimeInterval = 0
             updateSubscription = arView.scene.subscribe(to: SceneEvents.Update.self) { [weak self] event in
-                guard let loadedEntity = self?.loadedEntity else { return }
-                
+                guard let self, let loadedEntity = self.loadedEntity else { return }
+
+                if let player = self.animationPlayer {
+                    loadedEntity.entity.transform.rotation = simd_quatf(angle: rotationOffset, axis: SIMD3<Float>(0, 1, 0))
+                    player.update(deltaTime: event.deltaTime)
+                    return
+                }
+
                 time += event.deltaTime
-                
                 let cycle = time.truncatingRemainder(dividingBy: 1.0)
                 let angle: Float
                 if cycle < 0.5 {
@@ -143,14 +138,31 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
                     let progress = Float(cycle - 0.5) / 0.5
                     angle = -0.5 + 0.5 * progress
                 }
-                
                 loadedEntity.entity.transform.rotation = simd_quatf(angle: rotationOffset + angle, axis: SIMD3<Float>(0, 1, 0))
-                
                 loadedEntity.update(at: event.deltaTime)
             }
         } catch {
             print(error)
         }
+    }
+
+    private func poseManually(_ vrmEntity: VRMEntity) {
+        let neck = vrmEntity.humanoid.node(for: .neck)
+        let leftArm: Entity?
+        let rightArm: Entity?
+        switch vrmEntity.vrm {
+        case .v1:
+            leftArm = vrmEntity.humanoid.node(for: .leftShoulder)
+            rightArm = vrmEntity.humanoid.node(for: .rightShoulder)
+        case .v0:
+            leftArm = vrmEntity.humanoid.node(for: .leftUpperArm)
+            rightArm = vrmEntity.humanoid.node(for: .rightUpperArm)
+        }
+        let neckRotation = simd_quatf(angle: 20 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
+        let armRotation = simd_quatf(angle: 40 * .pi / 180, axis: SIMD3<Float>(0, 0, 1))
+        if let neck { neck.transform.rotation = neck.transform.rotation * neckRotation }
+        if let leftArm { leftArm.transform.rotation = leftArm.transform.rotation * armRotation }
+        if let rightArm { rightArm.transform.rotation = rightArm.transform.rotation * armRotation }
     }
 
     private func setUpCamera() {
