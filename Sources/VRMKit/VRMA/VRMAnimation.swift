@@ -1,21 +1,13 @@
 import Foundation
 
-/// A parsed VRM Animation (`.vrma`) file.
-///
-/// `.vrma` is a glTF / GLB container carrying the `VRMC_vrm_animation` extension.
-/// This type exposes the underlying glTF data, the humanoid-bone → node mapping
-/// and a ready-to-use sampler over the glTF animation clips so a renderer can
-/// retarget the motion onto a VRM avatar.
+/// A parsed VRM Animation (`.vrma`) file: a glTF / GLB container carrying the
+/// `VRMC_vrm_animation` extension.
 public struct VRMAnimation {
-    /// The underlying binary glTF container.
     public let gltf: BinaryGLTF
-    /// `specVersion` declared by the `VRMC_vrm_animation` extension (e.g. `"1.0"`).
     public let specVersion: String
-    /// The decoded `VRMC_vrm_animation` extension.
     public let vrmAnimation: VRMCVRMAnimation
 
-    /// Maps a VRM humanoid bone name (e.g. `"hips"`, `"leftUpperArm"`) to the glTF
-    /// node index that the animation clips drive.
+    /// VRM humanoid bone name (e.g. `"hips"`) → glTF node index driven by the clips.
     public let humanoidBoneNodeMap: [String: Int]
 
     /// Loads a `.vrma` bundled by `name` (with or without the `.vrma` extension).
@@ -26,7 +18,6 @@ public struct VRMAnimation {
         try self.init(withURL: url)
     }
 
-    /// Loads a `.vrma` from a file URL.
     public init(withURL url: URL) throws {
         try self.init(data: try Data(contentsOf: url))
     }
@@ -50,7 +41,6 @@ public struct VRMAnimation {
             } ?? [:]
     }
 
-    /// The glTF animation clips contained in the file (usually a single clip).
     public var clips: [GLTF.Animation] {
         gltf.jsonData.animations ?? []
     }

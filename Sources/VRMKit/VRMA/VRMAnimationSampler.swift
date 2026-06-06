@@ -1,23 +1,17 @@
 import Foundation
 import simd
 
-/// Samples a single glTF animation clip into per-node local transforms.
-///
-/// This is engine-agnostic: it decodes the keyframe accessors of a
-/// ``GLTF/Animation`` once and then evaluates translation / rotation / scale for
-/// every animated node at an arbitrary time. Renderers map the returned node
-/// indices onto their own scene graph (for `.vrma`, via
-/// ``VRMAnimation/humanoidBoneNodeMap``).
+/// Decodes a glTF animation clip's keyframe accessors once and evaluates each
+/// animated node's local transform at an arbitrary time. Engine-agnostic.
 public struct VRMAnimationSampler {
-    /// A node's animated local transform at a given time. Each component is `nil`
-    /// when the clip does not animate it.
+    /// A node's animated local transform. Each component is `nil` when the clip
+    /// does not animate it.
     public struct NodeTransform {
         public var translation: SIMD3<Float>?
         public var rotation: simd_quatf?
         public var scale: SIMD3<Float>?
     }
 
-    /// Total length of the clip in seconds (the largest keyframe time).
     public let duration: TimeInterval
 
     private struct Track {
@@ -30,9 +24,8 @@ public struct VRMAnimationSampler {
         let node: Int
         let path: Path
         let interpolation: GLTF.Animation.Sampler.Interpolation
-        let input: [Float]      // keyframe times (ascending)
-        let output: [SIMD4<Float>] // packed values; xyz used for VEC3, xyzw for VEC4
-        let componentCount: Int // 3 for translation/scale, 4 for rotation
+        let input: [Float]         // keyframe times (ascending)
+        let output: [SIMD4<Float>] // packed values: xyz for VEC3, xyzw for VEC4
     }
 
     private let tracks: [Track]
@@ -67,8 +60,7 @@ public struct VRMAnimationSampler {
                                 path: path,
                                 interpolation: sampler.interpolation,
                                 input: input,
-                                output: output,
-                                componentCount: componentCount))
+                                output: output))
         }
 
         self.tracks = tracks

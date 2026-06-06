@@ -108,21 +108,13 @@ final class RealityKitViewController: UIViewController, UIGestureRecognizerDeleg
             // Play a bundled `.vrma` animation if present; otherwise pose manually.
             animationPlayer = nil
             let vrmaURLs = Bundle.main.urls(forResourcesWithExtension: "vrma", subdirectory: nil) ?? []
-            print("VRMA: found \(vrmaURLs.count) .vrma file(s) in bundle: \(vrmaURLs.map { $0.lastPathComponent })")
-            if let url = vrmaURLs.first(where: { $0.deletingPathExtension().lastPathComponent == vrmaName }) ?? vrmaURLs.first {
-                do {
-                    let animation = try VRMAnimation(withURL: url)
-                    let player = try VRMAnimationPlayer(animation: animation, target: vrmEntity)
-                    player.isLooping = true
-                    player.play()
-                    animationPlayer = player
-                    print("VRMA loaded: \(url.lastPathComponent), duration \(player.duration)s, bones bound: \(animation.humanoidBoneNodeMap.count)")
-                } catch {
-                    print("VRMA FAILED to load \(url.lastPathComponent): \(error)")
-                    poseManually(vrmEntity)
-                }
+            let url = vrmaURLs.first { $0.deletingPathExtension().lastPathComponent == vrmaName } ?? vrmaURLs.first
+            if let url,
+               let animation = try? VRMAnimation(withURL: url),
+               let player = try? VRMAnimationPlayer(animation: animation, target: vrmEntity) {
+                player.play()
+                animationPlayer = player
             } else {
-                print("VRMA: no .vrma in bundle — add one to the VRMExample target. Using manual pose.")
                 poseManually(vrmEntity)
             }
 

@@ -1,16 +1,11 @@
 import Foundation
 
-// VRM Animation (`.vrma`) extension.
+// VRM Animation (`.vrma`) extension: maps the file's glTF nodes to humanoid bones,
+// expressions and look-at, so the glTF animations can be retargeted onto an avatar.
 // https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/README.md
-//
-// A `.vrma` file is a regular glTF / GLB whose root `extensions` object contains
-// `VRMC_vrm_animation`. The extension maps the file's glTF nodes to humanoid
-// bones, expressions and look-at, so the glTF `animations` (which target those
-// nodes) can be retargeted onto an arbitrary VRM avatar.
 
 public struct VRMCVRMAnimation: Codable {
-    // Optional: some exporters omit `specVersion`.
-    public let specVersion: String?
+    public let specVersion: String? // some exporters omit it
     public let humanoid: Humanoid?
     public let expressions: Expressions?
     public let lookAt: LookAt?

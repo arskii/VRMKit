@@ -5,27 +5,9 @@ import simd
 import VRMKit
 import VRMKitRuntime
 
-/// Plays a VRM Animation (`.vrma`) clip on a loaded ``VRMEntity`` by retargeting
-/// the clip's humanoid bones onto the avatar's humanoid skeleton.
-///
-/// Usage:
-/// ```swift
-/// let entity = try VRMEntityLoader(named: "avatar.vrm").loadEntity()
-/// let animation = try VRMAnimation(named: "dance")
-/// let player = try VRMAnimationPlayer(animation: animation, target: entity)
-/// player.play()
-///
-/// // From your render loop (e.g. RealityView's SceneEvents.Update):
-/// player.update(deltaTime: event.deltaTime)
-/// ```
-///
-/// ## Retargeting model
-/// Each animated bone's **world-space** rotation delta (relative to the clip's
-/// rest pose) is computed by accumulating local rotations down the clip's node
-/// hierarchy, then applied on top of the avatar bone's own rest world rotation
-/// and converted back to a local rotation. This is robust to differing rest
-/// poses between the clip and the avatar. For VRM 0.x avatars (which face the
-/// opposite direction from VRM 1.0 / the clip) the delta is mirrored about Y.
+/// Plays a VRM Animation (`.vrma`) clip on a loaded `VRMEntity` by retargeting
+/// the clip's humanoid bones onto the avatar's skeleton. Call `update(deltaTime:)`
+/// once per frame (e.g. from `SceneEvents.Update`).
 @available(iOS 18.0, macOS 15.0, visionOS 2.0, *)
 @MainActor
 public final class VRMAnimationPlayer {
@@ -34,15 +16,10 @@ public final class VRMAnimationPlayer {
     private let rootEntity: Entity
     private let sampler: VRMAnimationSampler
 
-    /// Whether playback loops back to the start when reaching the end.
     public var isLooping: Bool = true
-    /// Playback speed multiplier (1.0 = real time).
     public var speed: Double = 1.0
-    /// Whether the clip is currently advancing.
     public private(set) var isPlaying: Bool = false
-    /// Current playback head in seconds.
     public private(set) var time: TimeInterval = 0
-    /// Clip length in seconds.
     public var duration: TimeInterval { sampler.duration }
 
     private struct BoneBinding {
@@ -107,10 +84,8 @@ public final class VRMAnimationPlayer {
         applyPose(at: self.time)
     }
 
-    /// Advances playback by `deltaTime` seconds and pushes the new pose to the avatar.
-    ///
-    /// Call once per frame. This also drives the avatar's skinning / spring bones
-    /// via ``VRMEntity/update(at:)``.
+    /// Advances playback by `deltaTime` and pushes the new pose to the avatar,
+    /// also driving its skinning and spring bones.
     public func update(deltaTime: TimeInterval) {
         guard let target else { return }
         if isPlaying {
@@ -295,12 +270,6 @@ public final class VRMAnimationPlayer {
         }
         hipsEntity?.transform.translation = hipsTargetRestTranslation
         target?.update(at: 0)
-    }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
     }
 }
 #endif
