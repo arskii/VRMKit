@@ -57,3 +57,6 @@ UserInterfaceState.xcuserstate
 
 .build
 
+
+# Local VRMA test assets for the example app
+Example/Example/*.vrma
